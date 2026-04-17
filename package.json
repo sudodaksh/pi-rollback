@@ -1,0 +1,39 @@
+{
+  "name": "pi-rollback",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Claude Code-style restore for pi with automatic git-backed code snapshots and restore mode selection",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "rollback",
+    "restore",
+    "git"
+  ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sudodaksh/pi-revert.git"
+  },
+  "homepage": "https://github.com/sudodaksh/pi-revert",
+  "bugs": {
+    "url": "https://github.com/sudodaksh/pi-revert/issues"
+  },
+  "scripts": {
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "license": "MIT"
+}
