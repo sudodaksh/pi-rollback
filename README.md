@@ -4,7 +4,8 @@ Claude Code-style restore for [pi](https://github.com/badlogic/pi-mono/tree/main
 
 Features:
 - automatic git-backed snapshots when code changes
-- restore to prior conversation points
+- restore points are user prompts, not assistant replies
+- restoring a prompt rewinds to just before that prompt ran
 - choose restore mode:
   - code + conversation
   - conversation only
@@ -33,6 +34,11 @@ Commands:
 - `/restore`
 - `/rollback` — alias for `/restore`
 - `/rollback-gc`
+
+When you run `/restore`, the picker shows prior **user messages**.
+Selecting one means:
+- **Conversation restore**: jump to just before that prompt and put it back in the editor
+- **Code restore**: revert files to the snapshot captured before that prompt started
 
 ## Requirements
 
