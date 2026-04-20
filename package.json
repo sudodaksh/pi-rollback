@@ -25,11 +25,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sudodaksh/pi-revert.git"
+    "url": "git+https://github.com/sudodaksh/pi-rollback.git"
   },
-  "homepage": "https://github.com/sudodaksh/pi-revert",
+  "homepage": "https://github.com/sudodaksh/pi-rollback",
   "bugs": {
-    "url": "https://github.com/sudodaksh/pi-revert/issues"
+    "url": "https://github.com/sudodaksh/pi-rollback/issues"
   },
   "scripts": {
     "build": "echo 'nothing to build'",
