@@ -1,8 +1,8 @@
 {
   "name": "pi-rollback",
   "version": "0.1.0",
-  "type": "module",
   "description": "Claude Code-style restore for pi with automatic git-backed code snapshots and restore mode selection",
+  "type": "module",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -10,10 +10,13 @@
     "restore",
     "git"
   ],
+  "license": "MIT",
   "files": [
     "index.ts",
     "README.md",
-    "package.json"
+    "LICENSE",
+    "package.json",
+    "tsconfig.json"
   ],
   "pi": {
     "extensions": [
@@ -22,6 +25,16 @@
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "repository": {
     "type": "git",
@@ -32,8 +45,7 @@
     "url": "https://github.com/sudodaksh/pi-rollback/issues"
   },
   "scripts": {
-    "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
-  },
-  "license": "MIT"
+    "check": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run check"
+  }
 }

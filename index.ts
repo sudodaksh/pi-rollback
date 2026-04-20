@@ -40,7 +40,6 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 	SessionEntry,
-	SessionTreeNode,
 } from "@mariozechner/pi-coding-agent";
 
 const SNAPSHOT_TYPE = "rollback-snapshot";
@@ -120,6 +119,13 @@ interface PromptGroup {
 }
 
 type RestoreMode = "both" | "conversation" | "code";
+
+interface SessionTreeNode {
+	entry: SessionEntry;
+	children: SessionTreeNode[];
+	label?: string;
+	labelTimestamp?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Git helpers
@@ -206,11 +212,17 @@ function extractText(content: unknown): string {
 		.join("\n");
 }
 
+function getEntryMessageText(entry: SessionEntry): string {
+	if (entry.type !== "message") return "";
+	const message = entry.message as { role?: string; content?: unknown };
+	return extractText(message.content);
+}
+
 function getLastMessageText(entries: SessionEntry[], role: "user" | "assistant"): string | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry.type !== "message" || entry.message.role !== role) continue;
-		const text = extractText(entry.message.content);
+		const text = getEntryMessageText(entry);
 		if (text.trim()) return text;
 	}
 	return undefined;
@@ -498,7 +510,7 @@ function isExactConversationRestorePoint(entry: SessionEntry): boolean {
 
 function describeEntry(entry: SessionEntry): { label: string; preview: string } | undefined {
 	if (!isUserRestorePoint(entry)) return undefined;
-	const preview = truncate(extractText(entry.message.content), 90) ?? "(empty prompt)";
+	const preview = truncate(getEntryMessageText(entry), 90) ?? "(empty prompt)";
 	return {
 		label: "before prompt",
 		preview,

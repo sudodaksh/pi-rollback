@@ -146,7 +146,17 @@ Selecting prompt `b`:
 
 ## Package manifest
 
-This package is installable by pi because `package.json` contains:
+This repository is already structured as a publishable pi package.
+
+### Files used by pi
+
+- `package.json` — npm metadata + pi package manifest
+- `index.ts` — the extension entrypoint loaded by pi
+- `README.md` — package docs shown on npm/GitHub
+- `LICENSE` — required for clean package publishing
+- `tsconfig.json` — typecheck config for local validation and prepublish checks
+
+The important manifest is:
 
 ```json
 {
@@ -155,4 +165,25 @@ This package is installable by pi because `package.json` contains:
     "extensions": ["./index.ts"]
   }
 }
+```
+
+## Publish this package
+
+After pushing this repo to GitHub and logging into npm:
+
+```bash
+npm publish
+```
+
+Then users can install it with:
+
+```bash
+pi install npm:pi-rollback
+```
+
+To validate locally before publishing:
+
+```bash
+npm install
+npm run check
 ```
