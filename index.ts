@@ -3,15 +3,17 @@
  *
  * Claude Code-style restore for pi:
  * - automatically snapshots workspace state when code changes
- * - can restore conversation to any prior user prompt
+ * - can restore conversation to any prior user prompt boundary
  * - can restore code, conversation, or both
  *
  * Design:
  * - baseline snapshot is captured for the first prompt in a session branch
  * - after each completed agent run, a new snapshot is saved only if the
  *   workspace tree changed
- * - restore points are user messages, so restoring means going back to just
- *   before that prompt ran
+ * - restore points are mostly user messages, which restore to just before that
+ *   prompt ran
+ * - the session also exposes one "after prompt" restore point for the latest
+ *   saved completed state
  * - if a prompt did not create a new snapshot, the extension uses the nearest
  *   earlier snapshot on that branch path
  *
@@ -21,7 +23,7 @@
  * - Ignored files are preserved on restore
  *
  * Commands:
- * - /restore       Restore code + conversation to before a prior user prompt
+ * - /restore       Restore code + conversation to a prompt boundary
  * - /rollback      Alias for /restore
  * - /rollback-gc   Remove stale snapshot refs for the current session
  */
@@ -69,6 +71,7 @@ interface RollbackSnapshot {
 }
 
 interface RestorePoint {
+	kind: "before-prompt" | "after-prompt";
 	entryId: string;
 	depth: number;
 	timestamp: string;
@@ -363,8 +366,12 @@ function isUserRestorePoint(entry: SessionEntry): entry is Extract<SessionEntry,
 	return entry.type === "message" && entry.message.role === "user";
 }
 
+function isAssistantRestorePoint(entry: SessionEntry): entry is Extract<SessionEntry, { type: "message" }> {
+	return entry.type === "message" && entry.message.role === "assistant";
+}
+
 function isExactConversationRestorePoint(entry: SessionEntry): boolean {
-	return isUserRestorePoint(entry);
+	return isUserRestorePoint(entry) || isAssistantRestorePoint(entry);
 }
 
 function describeEntry(entry: SessionEntry): { label: string; preview: string } | undefined {
@@ -372,6 +379,17 @@ function describeEntry(entry: SessionEntry): { label: string; preview: string } 
 	const preview = truncate(extractText(entry.message.content), 90) ?? "(empty prompt)";
 	return {
 		label: "before prompt",
+		preview,
+	};
+}
+
+function getAfterPromptDescription(ctx: ExtensionContext, snapshot: RollbackSnapshot): { label: string; preview: string } {
+	const preview =
+		truncate(snapshot.data.promptPreview, 90) ??
+		truncate(getLastMessageText(ctx.sessionManager.getBranch(snapshot.data.targetId), "user"), 90) ??
+		"(unknown prompt)";
+	return {
+		label: "after prompt",
 		preview,
 	};
 }
@@ -385,6 +403,30 @@ function getCodeSnapshotSummary(point: RestorePoint): string {
 	return "earlier snapshot";
 }
 
+function getLatestAfterRestorePoint(ctx: ExtensionCommandContext): RestorePoint | undefined {
+	const latestPostRunSnapshot = getSnapshotEntries(ctx)
+		.filter((snapshot) => snapshot.data.kind === "post-run")
+		.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+	if (!latestPostRunSnapshot) return undefined;
+
+	const targetEntry = ctx.sessionManager.getEntry(latestPostRunSnapshot.data.targetId);
+	if (!targetEntry || !isAssistantRestorePoint(targetEntry)) return undefined;
+
+	const afterDescription = getAfterPromptDescription(ctx, latestPostRunSnapshot);
+	return {
+		kind: "after-prompt",
+		entryId: latestPostRunSnapshot.data.targetId,
+		depth: 0,
+		timestamp: latestPostRunSnapshot.timestamp,
+		label: afterDescription.label,
+		branchLabel: ctx.sessionManager.getLabel(latestPostRunSnapshot.data.targetId),
+		preview: afterDescription.preview,
+		exactSnapshot: true,
+		hasSnapshot: true,
+		resolvedSnapshot: latestPostRunSnapshot,
+	};
+}
+
 function collectRestorePoints(ctx: ExtensionCommandContext): RestorePoint[] {
 	const points: RestorePoint[] = [];
 	const snapshots = getSnapshotEntries(ctx);
@@ -395,12 +437,12 @@ function collectRestorePoints(ctx: ExtensionCommandContext): RestorePoint[] {
 			const description = describeEntry(node.entry);
 			if (description) {
 				const resolvedSnapshot = getResolvedSnapshot(ctx, node.entry.id);
-				const labelSuffix = node.label ? ` [${node.label}]` : "";
 				points.push({
+					kind: "before-prompt",
 					entryId: node.entry.id,
 					depth,
 					timestamp: node.entry.timestamp,
-					label: `${description.label}${labelSuffix}`,
+					label: description.label,
 					branchLabel: node.label,
 					preview: description.preview,
 					exactSnapshot: exactSnapshotIds.has(node.entry.id),
@@ -408,11 +450,17 @@ function collectRestorePoints(ctx: ExtensionCommandContext): RestorePoint[] {
 					resolvedSnapshot,
 				});
 			}
+
 			walk(node.children, depth + 1);
 		}
 	}
 
 	walk(ctx.sessionManager.getTree(), 0);
+
+	const latestAfterPoint = getLatestAfterRestorePoint(ctx);
+	if (latestAfterPoint) {
+		points.push(latestAfterPoint);
+	}
 
 	return points.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 }
@@ -420,13 +468,14 @@ function collectRestorePoints(ctx: ExtensionCommandContext): RestorePoint[] {
 function formatRestorePoint(point: RestorePoint, index: number): string {
 	const time = new Date(point.timestamp).toLocaleString();
 	const branch = point.branchLabel ? ` [${point.branchLabel}]` : "";
-	return `${index + 1}. ${point.preview}${branch} — ${getCodeSnapshotSummary(point)} (${time})`;
+	const phase = point.kind === "after-prompt" ? "after" : "before";
+	return `${index + 1}. ${phase}: ${point.preview}${branch} — ${getCodeSnapshotSummary(point)} (${time})`;
 }
 
 async function pickRestorePoint(args: string, ctx: ExtensionCommandContext): Promise<RestorePoint | undefined> {
 	const points = collectRestorePoints(ctx);
 	if (points.length === 0) {
-		ctx.ui.notify("No restorable user prompts found", "warning");
+		ctx.ui.notify("No restorable prompts or final states found", "warning");
 		return undefined;
 	}
 
@@ -439,7 +488,7 @@ async function pickRestorePoint(args: string, ctx: ExtensionCommandContext): Pro
 
 		const lower = trimmedArgs.toLowerCase();
 		const match = points.find((point) => {
-			const haystack = `${point.label} ${point.preview}`.toLowerCase();
+			const haystack = `${point.label} ${point.preview} ${point.branchLabel ?? ""}`.toLowerCase();
 			return haystack.includes(lower) || point.entryId === trimmedArgs;
 		});
 		if (match) return match;
@@ -453,11 +502,10 @@ async function pickRestorePoint(args: string, ctx: ExtensionCommandContext): Pro
 	const options = points.map((point, index) => formatRestorePoint(point, index));
 	const selected = await ctx.ui.select(
 		[
-			"Restore to before a prompt ran",
+			"Pick a restore point",
 			"",
-			"Pick the user message to rewind to.",
-			"Conversation restore jumps to just before that prompt and puts it back in the editor.",
-			"Code restore reverts files to the snapshot from before that prompt started.",
+			"before: just before a prompt ran",
+			"after: the latest saved completed end state in this session",
 		].join("\n"),
 		options,
 	);
@@ -504,15 +552,18 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext): Promi
 		return;
 	}
 
+	const isAfterPrompt = point.kind === "after-prompt";
 	let mode: RestoreMode = snapshot ? "both" : "conversation";
 
 	if (ctx.hasUI) {
 		const details = [
 			`Prompt: ${point.preview}`,
-			"Restore target: just before this prompt ran",
-			"Conversation restore: rewinds here and puts this prompt back in the editor",
+			isAfterPrompt ? "Restore target: just after this prompt completed" : "Restore target: just before this prompt ran",
+			isAfterPrompt
+				? "Conversation restore: restores the completed response after this prompt"
+				: "Conversation restore: rewinds here and puts this prompt back in the editor",
 			snapshot
-				? `Code restore: ${point.exactSnapshot ? "uses the exact snapshot taken before this prompt" : "uses the nearest earlier snapshot on this branch"}`
+				? `Code restore: ${isAfterPrompt ? "uses the exact snapshot taken after this run" : point.exactSnapshot ? "uses the exact snapshot taken before this prompt" : "uses the nearest earlier snapshot on this branch"}`
 				: "Code restore: not available for this prompt",
 			`Selected: ${new Date(point.timestamp).toLocaleString()}`,
 			snapshot ? `Snapshot created: ${new Date(snapshot.timestamp).toLocaleString()}` : undefined,
@@ -523,28 +574,28 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext): Promi
 			.filter(Boolean)
 			.join("\n");
 
-		const options = snapshot
-			? [
-				"Restore code + conversation (rewind to before this prompt)",
-				"Restore conversation only (rewind and put prompt back in editor)",
-				"Restore code only (revert files only)",
-				"Cancel",
-			]
-			: ["Restore conversation only (rewind and put prompt back in editor)", "Cancel"];
+		const bothOption = isAfterPrompt
+			? "Restore code + conversation (restore to after this prompt)"
+			: "Restore code + conversation (rewind to before this prompt)";
+		const conversationOption = isAfterPrompt
+			? "Restore conversation only (show the completed response after this prompt)"
+			: "Restore conversation only (rewind and put prompt back in editor)";
+		const codeOption = "Restore code only (revert files only)";
+		const options = snapshot ? [bothOption, conversationOption, codeOption, "Cancel"] : [conversationOption, "Cancel"];
 		const choice = await ctx.ui.select(`Choose restore mode\n\n${details}`, options);
 		if (!choice || choice === "Cancel") {
 			ctx.ui.notify("Restore cancelled", "info");
 			return;
 		}
-		if (choice === "Restore conversation only (rewind and put prompt back in editor)") mode = "conversation";
-		else if (choice === "Restore code only (revert files only)") mode = "code";
+		if (choice === conversationOption) mode = "conversation";
+		else if (choice === codeOption) mode = "code";
 		else mode = "both";
 	}
 
 	let restoredCode = false;
 	if (mode === "both" || mode === "conversation") {
 		if (!isExactConversationRestorePoint(targetEntry)) {
-			ctx.ui.notify("Only user prompts can restore conversation exactly", "warning");
+			ctx.ui.notify("Only completed assistant responses and user prompts can restore conversation exactly", "warning");
 			return;
 		}
 		if (ctx.sessionManager.getLeafId() !== point.entryId) {
@@ -566,21 +617,30 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext): Promi
 	}
 
 	if (mode === "both") {
-		ctx.ui.notify(`Restored to before prompt: ${point.preview}`, "info");
+		ctx.ui.notify(isAfterPrompt ? `Restored to after prompt: ${point.preview}` : `Restored to before prompt: ${point.preview}`, "info");
 	} else if (mode === "code") {
 		ctx.ui.notify(
-			restoredCode ? `Restored code only to before prompt: ${point.preview}` : "No saved code snapshot exists for this point",
+			restoredCode
+				? isAfterPrompt
+					? `Restored code only to after prompt: ${point.preview}`
+					: `Restored code only to before prompt: ${point.preview}`
+				: "No saved code snapshot exists for this point",
 			restoredCode ? "info" : "warning",
 		);
 	} else {
-		ctx.ui.notify(`Restored conversation only to before prompt: ${point.preview}`, "info");
+		ctx.ui.notify(
+			isAfterPrompt
+				? `Restored conversation only to after prompt: ${point.preview}`
+				: `Restored conversation only to before prompt: ${point.preview}`,
+			"info",
+		);
 	}
 }
 
 export default function rollbackExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("restore", {
-		description: "Restore code + conversation to before a prior user prompt",
+		description: "Restore code + conversation to a prompt boundary",
 		handler: async (args, ctx) => {
 			try {
 				await ctx.waitForIdle();

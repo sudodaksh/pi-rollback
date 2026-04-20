@@ -1,50 +1,114 @@
 # pi-rollback
 
-Claude Code-style restore for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
+Git-backed restore for [pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).
 
-Features:
-- automatic git-backed snapshots when code changes
-- restore points are user prompts, not assistant replies
-- restoring a prompt rewinds to just before that prompt ran
-- choose restore mode:
-  - code + conversation
-  - conversation only
-  - code only
-- rollback snapshot ref cleanup via `/rollback-gc`
+`pi-rollback` automatically snapshots your workspace as you work, then lets you restore either:
+- the conversation,
+- the code,
+- or both.
+
+The restore UX is built around **prompt boundaries**, which makes it much easier to understand what you are restoring.
+
+## What gets saved
+
+During a session, the extension saves git-backed snapshots at two useful boundaries:
+
+- **before:** just before a user prompt runs
+- **after:** the latest saved completed end state in the session
+
+That means restore points map to how you actually think about work:
+- "go back to before I asked for this"
+- "bring me back to the latest finished state"
+
+## Typical flow
+
+1. Work normally in a **git repository**.
+2. Ask pi to make changes.
+3. The extension captures:
+   - a **baseline** snapshot before a prompt runs
+   - a **post-run** snapshot after a completed run, but only if the workspace changed
+4. Run `/restore` when you want to go back.
+5. Pick a restore point:
+   - `before: ...` = restore to just before that prompt ran
+   - `after: ...` = restore to the latest saved completed state
+6. Pick a restore mode:
+   - **code + conversation**
+   - **conversation only**
+   - **code only**
+
+## Restore semantics
+
+### `before: <prompt>`
+
+This means **just before that prompt ran**.
+
+- **Conversation restore**: rewinds there and puts that prompt back in the editor
+- **Code restore**: restores files to the snapshot from before that prompt started
+
+### `after: <prompt>`
+
+This means **the saved completed state after that prompt finished**.
+
+- **Conversation restore**: restores the completed response after that prompt
+- **Code restore**: restores files to the exact post-run snapshot for that completed state
+
+There is only **one** `after:` entry in the picker: the latest saved completed state in the session.
+It stays available even if you temporarily navigate back to an earlier `before:` point.
+
+## Example
+
+Say your session looked like this:
+
+1. `a: update README.md`
+2. `b: update loop.md`
+
+Then `/restore` behaves like this:
+
+- `before: a` → restore to the original state before `README.md` changed
+- `before: b` → restore to the state after `a`, but before `b`
+- `after: b` → restore to the finished state after `b`, including `loop.md`
 
 ## Install
 
 ### From a local checkout
 
+From this repository root:
+
 ```bash
-pi install /absolute/path/to/packages/pi-rollback
-# or
-pi install ./packages/pi-rollback
+pi install .
+```
+
+Or with an absolute path:
+
+```bash
+pi install /absolute/path/to/pi-revert
 ```
 
 ### For one-off testing
 
+From this repository root:
+
 ```bash
-pi -e ./packages/pi-rollback
+pi -e .
 ```
 
-## Usage
+## Commands
 
-Commands:
 - `/restore`
 - `/rollback` — alias for `/restore`
-- `/rollback-gc`
-
-When you run `/restore`, the picker shows prior **user messages**.
-Selecting one means:
-- **Conversation restore**: jump to just before that prompt and put it back in the editor
-- **Code restore**: revert files to the snapshot captured before that prompt started
+- `/rollback-gc` — remove stale rollback snapshot refs for the current session
 
 ## Requirements
 
 - must be inside a git repository
 - snapshots include tracked + untracked non-ignored files
 - ignored files are preserved on restore
+
+## Notes
+
+- Post-run snapshots are only saved when the workspace actually changes.
+- If a prompt does not have its own exact snapshot, restore uses the nearest earlier snapshot on that branch path.
+- Snapshots are stored as git refs under `refs/pi/rollback/...`.
 
 ## Package manifest
 
