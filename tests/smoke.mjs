@@ -14,6 +14,7 @@ const {
 	getResolvedSnapshot,
 	savePreRestoreState,
 	undoLastRestore,
+	restoreToPoint,
 } = __testing__;
 
 function exec(command, args, cwd) {
@@ -112,6 +113,26 @@ class SessionHarness {
 		}
 		return branch;
 	}
+
+	getTree() {
+		const byParent = new Map();
+		for (const entry of this.entries) {
+			const key = entry.parentId ?? null;
+			const nodes = byParent.get(key) ?? [];
+			nodes.push({ entry, children: [], label: undefined, labelTimestamp: undefined });
+			byParent.set(key, nodes);
+		}
+
+		function attach(parentId) {
+			const nodes = byParent.get(parentId ?? null) ?? [];
+			for (const node of nodes) {
+				node.children = attach(node.entry.id);
+			}
+			return nodes;
+		}
+
+		return attach(null);
+	}
 }
 
 function createPi(session) {
@@ -127,6 +148,19 @@ function createContext(session, cwd) {
 		hasUI: false,
 		cwd,
 		sessionManager: session,
+		ui: {
+			notify() {},
+		},
+	};
+}
+
+function createCommandContext(session, cwd) {
+	return {
+		...createContext(session, cwd),
+		navigateTree: async (targetId) => {
+			session.leafId = targetId;
+			return { cancelled: false };
+		},
 	};
 }
 
@@ -146,6 +180,7 @@ async function main() {
 		const session = new SessionHarness();
 		const pi = createPi(session);
 		const ctx = createContext(session, repoRoot);
+		const commandCtx = createCommandContext(session, repoRoot);
 
 		// --- First prompt: simulate agent_start -> file change -> agent_end ---
 
@@ -220,6 +255,33 @@ async function main() {
 		assert.equal(allEvents.length, 2, "should have restore + undo events");
 		assert.equal(allEvents[1].data.kind, "undo-restore");
 
+		// --- Restore should also move the session leaf, and undo should move it back ---
+
+		const user2RestoreId = session.appendMessage("user", "make it later again");
+		await writeFile(notePath, "latest\n");
+		const latestTree = await buildWorkingTree(repoRoot);
+		await persistSnapshot(pi, ctx, { targetId: user2RestoreId, tree: latestTree, kind: "baseline" });
+		const assistant2RestoreId = session.appendMessage("assistant", "Updated note.txt again.");
+		const latestPostRunTree = await buildWorkingTree(repoRoot);
+		await persistSnapshot(pi, ctx, { targetId: assistant2RestoreId, tree: latestPostRunTree, kind: "post-run" });
+
+		const user3CurrentId = session.appendMessage("user", "continue from here");
+		assert.equal(session.getLeafId(), user3CurrentId, "sanity check: current leaf should be latest prompt");
+
+		await restoreToPoint(user1Id, commandCtx, pi);
+
+		const restoreEventsAfterCommand = getRestoreEventEntries(ctx);
+		const lastRestoreEvent = restoreEventsAfterCommand.at(-1);
+		assert.equal(lastRestoreEvent?.data.kind, "restore", "restoreToPoint should record a restore event");
+		assert.equal(lastRestoreEvent?.data.preRestoreEntryId, user3CurrentId, "restore should remember the pre-restore session leaf");
+		assert.equal(session.getLeafId(), user1Id, "restoreToPoint should rewind the session leaf to the selected prompt");
+		assert.equal(await readFile(notePath, "utf8"), "base\n", "restoreToPoint should also restore code to the selected prompt state");
+
+		await undoLastRestore(pi, commandCtx);
+
+		assert.equal(session.getLeafId(), user3CurrentId, "undoLastRestore should restore the previous session leaf");
+		assert.equal(await readFile(notePath, "utf8"), "latest\n", "undoLastRestore should restore the pre-restore working tree");
+
 		// --- Second prompt: no code changes ---
 
 		const user2Id = session.appendMessage("user", "explain the changes");
@@ -234,9 +296,9 @@ async function main() {
 
 		// Verify total snapshot count
 		const finalSnapshots = getSnapshotEntries(ctx);
-		assert.equal(finalSnapshots.length, 3, "should have 3 snapshots (baseline + post-run + second baseline)");
+		assert.equal(finalSnapshots.length, 5, "should have 5 snapshots after the added restore/undo coverage");
 
-		console.log("pi-rollback smoke test passed");
+		console.log("pi-code-rollback smoke test passed");
 	} finally {
 		await rm(repoRoot, { recursive: true, force: true });
 	}

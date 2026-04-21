@@ -26,7 +26,7 @@
  * Commands:
  * - /restore        Restore code + conversation to a prompt boundary
  * - /rollback       Alias for /restore
- * - /undo-restore   Undo the last code restore
+ * - /undo-restore   Undo the last restore (code, and conversation when applicable)
  * - /rollback-gc    Remove stale snapshot refs for the current session
  */
 
@@ -81,6 +81,7 @@ interface RestoreEventData {
 	restoreEventId: string;
 	preRestoreTree: string;
 	preRestoreRef: string;
+	preRestoreEntryId?: string | null;
 	restoredToEntryId: string;
 	restoredToSnapshotRef?: string;
 	mode: RestoreMode;
@@ -256,6 +257,7 @@ function isRestoreEventData(data: unknown): data is RestoreEventData {
 		typeof event.restoreEventId === "string" &&
 		typeof event.preRestoreTree === "string" &&
 		typeof event.preRestoreRef === "string" &&
+		(event.preRestoreEntryId === undefined || event.preRestoreEntryId === null || typeof event.preRestoreEntryId === "string") &&
 		typeof event.restoredToEntryId === "string" &&
 		(event.kind === "restore" || event.kind === "undo-restore") &&
 		typeof event.repoRoot === "string" &&
@@ -699,6 +701,7 @@ async function savePreRestoreState(
 	options: {
 		repoRoot: string;
 		currentTree: string;
+		preRestoreEntryId?: string | null;
 		restoredToEntryId: string;
 		restoredToSnapshotRef?: string;
 		mode: RestoreMode;
@@ -718,6 +721,7 @@ async function savePreRestoreState(
 		restoreEventId,
 		preRestoreTree: options.currentTree,
 		preRestoreRef: ref,
+		preRestoreEntryId: options.preRestoreEntryId ?? ctx.sessionManager.getLeafId(),
 		restoredToEntryId: options.restoredToEntryId,
 		restoredToSnapshotRef: options.restoredToSnapshotRef,
 		mode: options.mode,
@@ -751,6 +755,7 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext, pi: Ex
 		return;
 	}
 
+	const preRestoreEntryId = ctx.sessionManager.getLeafId();
 	let currentTree: string | undefined;
 	if (snapshot) {
 		currentTree = await buildWorkingTree(repoRoot);
@@ -801,11 +806,23 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext, pi: Ex
 		else mode = "both";
 	}
 
+	let savedRestoreState = false;
 	if (mode === "both" || mode === "conversation") {
 		if (!isExactConversationRestorePoint(targetEntry)) {
 			ctx.ui.notify("Only completed assistant responses and user prompts can restore conversation exactly", "warning");
 			return;
 		}
+		if (!currentTree) currentTree = await buildWorkingTree(repoRoot);
+		await savePreRestoreState(pi, ctx, {
+			repoRoot,
+			currentTree,
+			preRestoreEntryId,
+			restoredToEntryId: point.entryId,
+			restoredToSnapshotRef: snapshot?.data.ref,
+			mode,
+			kind: "restore",
+		});
+		savedRestoreState = true;
 		if (ctx.sessionManager.getLeafId() !== point.entryId) {
 			const result = await ctx.navigateTree(point.entryId, { summarize: false });
 			if (result.cancelled) {
@@ -824,14 +841,18 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext, pi: Ex
 			}
 		} else {
 			if (!currentTree) currentTree = await buildWorkingTree(repoRoot);
-			await savePreRestoreState(pi, ctx, {
-				repoRoot,
-				currentTree,
-				restoredToEntryId: point.entryId,
-				restoredToSnapshotRef: snapshot.data.ref,
-				mode,
-				kind: "restore",
-			});
+			if (!savedRestoreState) {
+				await savePreRestoreState(pi, ctx, {
+					repoRoot,
+					currentTree,
+					preRestoreEntryId,
+					restoredToEntryId: point.entryId,
+					restoredToSnapshotRef: snapshot.data.ref,
+					mode,
+					kind: "restore",
+				});
+				savedRestoreState = true;
+			}
 			await restoreSnapshot(repoRoot, snapshot.data.ref);
 			restoredCode = true;
 		}
@@ -862,7 +883,11 @@ async function restoreToPoint(args: string, ctx: ExtensionCommandContext, pi: Ex
 // Undo restore
 // ---------------------------------------------------------------------------
 
-async function undoLastRestore(pi: ExtensionAPI, ctx: ExtensionContext): Promise<boolean> {
+type UndoRestoreContext = ExtensionContext & {
+	navigateTree?: ExtensionCommandContext["navigateTree"];
+};
+
+async function undoLastRestore(pi: ExtensionAPI, ctx: UndoRestoreContext): Promise<boolean> {
 	const repoRoot = await getGitRoot(ctx.cwd);
 	if (!repoRoot) throw new Error("Not inside a git repository — undo-restore requires git");
 
@@ -874,12 +899,28 @@ async function undoLastRestore(pi: ExtensionAPI, ctx: ExtensionContext): Promise
 	await savePreRestoreState(pi, ctx, {
 		repoRoot,
 		currentTree,
+		preRestoreEntryId: ctx.sessionManager.getLeafId(),
 		restoredToEntryId: lastRestore.data.restoredToEntryId,
 		mode: "code",
 		kind: "undo-restore",
 	});
 
 	await restoreSnapshot(repoRoot, lastRestore.data.preRestoreRef);
+
+	const preRestoreEntryId =
+		typeof lastRestore.data.preRestoreEntryId === "string" && lastRestore.data.preRestoreEntryId.length > 0
+			? lastRestore.data.preRestoreEntryId
+			: undefined;
+	const shouldRestoreConversation =
+		(lastRestore.data.mode === "both" || lastRestore.data.mode === "conversation") && !!preRestoreEntryId;
+
+	if (shouldRestoreConversation && ctx.navigateTree && ctx.sessionManager.getLeafId() !== preRestoreEntryId) {
+		const result = await ctx.navigateTree(preRestoreEntryId, { summarize: false });
+		if (result.cancelled) {
+			throw new Error("Conversation undo was cancelled");
+		}
+	}
+
 	return true;
 }
 
@@ -914,13 +955,13 @@ export default function rollbackExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("undo-restore", {
-		description: "Undo the last code restore",
+		description: "Undo the last restore",
 		handler: async (_args, ctx) => {
 			try {
 				await ctx.waitForIdle();
 				const undone = await undoLastRestore(pi, ctx);
 				ctx.ui.notify(
-					undone ? "Undo restore complete — working tree recovered" : "No restore to undo",
+					undone ? "Undo restore complete — code recovered and conversation restored when applicable" : "No restore to undo",
 					undone ? "info" : "warning",
 				);
 			} catch (error) {
@@ -1008,6 +1049,7 @@ export const __testing__ = {
 	getExactSnapshot,
 	savePreRestoreState,
 	undoLastRestore,
+	restoreToPoint,
 	getGitRoot,
 	runGit,
 	GIT_IDENTITY,

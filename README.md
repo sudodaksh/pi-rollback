@@ -91,7 +91,7 @@ That means restore points map to how you actually think about work:
    - **conversation only**
    - **code only**
 
-If you change your mind after restoring, run `/undo-restore` to recover the working tree from before the restore.
+If you change your mind after restoring, run `/undo-restore` to recover the working tree from before the restore and restore the conversation position when the original restore changed it.
 
 ## Restore semantics
 
@@ -128,7 +128,7 @@ Selecting prompt `b`:
 
 - `/restore` — restore code + conversation to a prompt boundary
 - `/rollback` — alias for `/restore`
-- `/undo-restore` — undo the last code restore (recovers the working tree from before the restore)
+- `/undo-restore` — undo the last restore (recovers the working tree, and restores the conversation position when applicable)
 - `/rollback-gc` — remove stale rollback snapshot refs for the current session
 
 ## Requirements
@@ -142,6 +142,7 @@ Selecting prompt `b`:
 - Post-run snapshots are only saved when the workspace actually changes.
 - If a prompt does not have its own exact snapshot, restore uses the nearest earlier snapshot on that branch path.
 - Before any code restore, the current working tree is saved so it can be undone with `/undo-restore`.
+- If the original restore also rewound or advanced the session conversation, `/undo-restore` restores that conversation position too.
 - Snapshots are stored as orphan git commits under `refs/pi/rollback/...`.
 
 ## Package manifest
