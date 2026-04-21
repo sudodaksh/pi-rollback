@@ -14,7 +14,7 @@ The restore UX is built around **prompt boundaries**, which makes it much easier
 ### Install from GitHub for all projects
 
 ```bash
-pi install https://github.com/sudodaksh/pi-rollback.git
+pi install https://github.com/sudodaksh/pi-code-rollback.git
 ```
 
 This writes to your global pi settings, so the extension is available in every repo.
@@ -22,7 +22,7 @@ This writes to your global pi settings, so the extension is available in every r
 ### Install only for the current project
 
 ```bash
-pi install -l https://github.com/sudodaksh/pi-rollback.git
+pi install -l https://github.com/sudodaksh/pi-code-rollback.git
 ```
 
 This writes to `.pi/settings.json` in the current project.
@@ -30,7 +30,7 @@ This writes to `.pi/settings.json` in the current project.
 ### Try it without installing
 
 ```bash
-pi -e https://github.com/sudodaksh/pi-rollback.git
+pi -e https://github.com/sudodaksh/pi-code-rollback.git
 ```
 
 This loads the extension for the current pi run only.
@@ -46,7 +46,7 @@ pi install .
 Or with an absolute path:
 
 ```bash
-pi install /absolute/path/to/pi-rollback
+pi install /absolute/path/to/pi-code-rollback
 ```
 
 For one-off local testing:

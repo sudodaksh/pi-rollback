@@ -38,11 +38,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sudodaksh/pi-rollback.git"
+    "url": "git+https://github.com/sudodaksh/pi-code-rollback.git"
   },
-  "homepage": "https://github.com/sudodaksh/pi-rollback",
+  "homepage": "https://github.com/sudodaksh/pi-code-rollback",
   "bugs": {
-    "url": "https://github.com/sudodaksh/pi-rollback/issues"
+    "url": "https://github.com/sudodaksh/pi-code-rollback/issues"
   },
   "scripts": {
     "check": "tsc -p tsconfig.json",
